@@ -32,7 +32,7 @@ pub enum RegistryError {
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContractEntry {
     /// The registered Soroban contract address.
     pub contract_id: Address,
@@ -153,4 +153,110 @@ impl LuminaRegistry {
     // TODO: get_active_contracts(offset, limit) → Vec<ContractEntry>
     // TODO: get_contracts_by_owner(owner) → Vec<ContractEntry>
     // TODO: update_metadata(owner, contract_id, name, description)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+
+    fn setup() -> (Env, LuminaRegistryClient<'static>, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(LuminaRegistry, ());
+        let client = LuminaRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        (env, client, admin)
+    }
+
+    fn register_sample(env: &Env, client: &LuminaRegistryClient) -> (Address, Address) {
+        let owner = Address::generate(env);
+        let target = Address::generate(env);
+        let name = String::from_str(env, "Test Contract");
+        let description = String::from_str(env, "A test contract");
+        client.register_contract(&owner, &target, &name, &description);
+        (owner, target)
+    }
+
+    #[test]
+    fn initialize_sets_zero_count() {
+        let (_, client, _) = setup();
+        assert_eq!(client.get_contract_count(), 0);
+    }
+
+    #[test]
+    fn initialize_twice_fails() {
+        let (_, client, admin) = setup();
+        let result = client.try_initialize(&admin);
+        assert_eq!(result, Err(Ok(RegistryError::AlreadyInitialized)));
+    }
+
+    #[test]
+    fn register_contract_succeeds() {
+        let (env, client, _admin) = setup();
+        let (owner, target) = register_sample(&env, &client);
+
+        assert!(client.is_registered(&target));
+        assert_eq!(client.get_contract_count(), 1);
+
+        let entry = client.get_contract(&target);
+        assert_eq!(entry.owner, owner);
+        assert_eq!(entry.contract_id, target);
+        assert!(entry.active);
+    }
+
+    #[test]
+    fn register_contract_rejects_duplicate() {
+        let (env, client, _admin) = setup();
+        let (owner, target) = register_sample(&env, &client);
+
+        let name = String::from_str(&env, "Test Contract");
+        let description = String::from_str(&env, "A test contract");
+        let result = client.try_register_contract(&owner, &target, &name, &description);
+        assert_eq!(result, Err(Ok(RegistryError::AlreadyRegistered)));
+    }
+
+    #[test]
+    fn deactivate_by_owner_succeeds() {
+        let (env, client, _admin) = setup();
+        let (owner, target) = register_sample(&env, &client);
+
+        client.deactivate(&owner, &target);
+        assert!(!client.get_contract(&target).active);
+    }
+
+    #[test]
+    fn deactivate_by_admin_succeeds() {
+        let (env, client, admin) = setup();
+        let (_owner, target) = register_sample(&env, &client);
+
+        client.deactivate(&admin, &target);
+        assert!(!client.get_contract(&target).active);
+    }
+
+    #[test]
+    fn deactivate_by_unrelated_caller_fails() {
+        let (env, client, _admin) = setup();
+        let (_owner, target) = register_sample(&env, &client);
+        let stranger = Address::generate(&env);
+
+        let result = client.try_deactivate(&stranger, &target);
+        assert_eq!(result, Err(Ok(RegistryError::Unauthorized)));
+    }
+
+    #[test]
+    fn get_contract_not_found_for_unknown_address() {
+        let (env, client, _admin) = setup();
+        let target = Address::generate(&env);
+        let result = client.try_get_contract(&target);
+        assert_eq!(result, Err(Ok(RegistryError::ContractNotFound)));
+    }
+
+    #[test]
+    fn is_registered_false_for_unknown_contract() {
+        let (env, client, _admin) = setup();
+        let target = Address::generate(&env);
+        assert!(!client.is_registered(&target));
+    }
 }
