@@ -54,6 +54,7 @@ pub enum DataKey {
     ContractCount,
     Contract(Address),
     OwnerContracts(Address), // owner → Vec<Address>
+    AllContracts,            // insertion-ordered Vec<Address> of every registered contract
 }
 
 // ─── Contract ──────────────────────────────────────────────────────────────
@@ -98,6 +99,10 @@ impl LuminaRegistry {
         };
 
         env.storage().persistent().set(&DataKey::Contract(contract_id.clone()), &entry);
+
+        let mut all: Vec<Address> = env.storage().instance().get(&DataKey::AllContracts).unwrap_or(Vec::new(&env));
+        all.push_back(contract_id.clone());
+        env.storage().instance().set(&DataKey::AllContracts, &all);
 
         let count: u32 = env.storage().instance().get(&DataKey::ContractCount).unwrap_or(0);
         env.storage().instance().set(&DataKey::ContractCount, &(count + 1));
@@ -150,7 +155,26 @@ impl LuminaRegistry {
         env.storage().persistent().has(&DataKey::Contract(contract_id))
     }
 
-    // TODO: get_active_contracts(offset, limit) → Vec<ContractEntry>
+    /// Paginated list of active (non-deactivated) registered contracts, in
+    /// registration order. Used by the Lumina indexer to discover what to index.
+    pub fn get_active_contracts(env: Env, offset: u32, limit: u32) -> Vec<ContractEntry> {
+        let all: Vec<Address> = env.storage().instance().get(&DataKey::AllContracts).unwrap_or(Vec::new(&env));
+        let mut result = Vec::new(&env);
+
+        let mut i = offset;
+        while i < all.len() && result.len() < limit {
+            let contract_id = all.get(i).unwrap();
+            if let Some(entry) = env.storage().persistent().get::<DataKey, ContractEntry>(&DataKey::Contract(contract_id)) {
+                if entry.active {
+                    result.push_back(entry);
+                }
+            }
+            i += 1;
+        }
+
+        result
+    }
+
     // TODO: get_contracts_by_owner(owner) → Vec<ContractEntry>
     // TODO: update_metadata(owner, contract_id, name, description)
 }
@@ -258,5 +282,49 @@ mod test {
         let (env, client, _admin) = setup();
         let target = Address::generate(&env);
         assert!(!client.is_registered(&target));
+    }
+
+    #[test]
+    fn get_active_contracts_empty_registry_returns_empty() {
+        let (_, client, _admin) = setup();
+        let result = client.get_active_contracts(&0, &10);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn get_active_contracts_returns_registered_entries() {
+        let (env, client, _admin) = setup();
+        let (_owner, target) = register_sample(&env, &client);
+
+        let result = client.get_active_contracts(&0, &10);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get(0).unwrap().contract_id, target);
+    }
+
+    #[test]
+    fn get_active_contracts_excludes_deactivated() {
+        let (env, client, _admin) = setup();
+        let (owner, target) = register_sample(&env, &client);
+        client.deactivate(&owner, &target);
+
+        let result = client.get_active_contracts(&0, &10);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn get_active_contracts_respects_limit_and_offset() {
+        let (env, client, _admin) = setup();
+        for _ in 0..5 {
+            register_sample(&env, &client);
+        }
+
+        let first_page = client.get_active_contracts(&0, &2);
+        assert_eq!(first_page.len(), 2);
+
+        let second_page = client.get_active_contracts(&2, &2);
+        assert_eq!(second_page.len(), 2);
+
+        let third_page = client.get_active_contracts(&4, &2);
+        assert_eq!(third_page.len(), 1);
     }
 }
