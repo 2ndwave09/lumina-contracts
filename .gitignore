@@ -1,0 +1,7 @@
+# Rust/Soroban build
+target/
+**/test_snapshots/
+
+# OS
+.DS_Store
+Thumbs.db

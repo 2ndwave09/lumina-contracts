@@ -17,7 +17,6 @@ stellar keys generate lumina-deployer --network testnet --fund
 ## Build and deploy
 
 ```bash
-cd contracts
 stellar contract build
 stellar contract deploy \
   --wasm target/wasm32-unknown-unknown/release/lumina_registry.wasm \
@@ -53,9 +52,10 @@ stellar contract invoke \
 
 ## What's next
 
-The indexer's Soroban event indexing (`SOROBAN_RPC_URL` + `INDEXED_CONTRACT_IDS`,
-see `indexer/src/index.ts`) currently takes a static, manually-curated contract
-ID list. `get_active_contracts(offset, limit)` on the deployed registry is
+[lumina-backend](https://github.com/Lumeeena/lumina-backend)'s Soroban event
+indexing (`SOROBAN_RPC_URL` + `INDEXED_CONTRACT_IDS`, see `indexer/src/index.ts`
+in that repo) currently takes a static, manually-curated contract ID list.
+`get_active_contracts(offset, limit)` on the deployed registry is
 ready to be polled to populate that list automatically — that wiring
 (indexer → Soroban RPC `simulateTransaction` → registry → merge into the
 indexed set) is the one piece intentionally left for a follow-up, since it
