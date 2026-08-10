@@ -1,11 +1,25 @@
 # Deploying the Lumina Registry
 
-This is a manual, one-time step — the registry doesn't need to be deployed
-for the rest of Lumina (indexer/GraphQL/frontend) to work. Deploy it once
+Deploying the registry is optional — the rest of Lumina (indexer/GraphQL/frontend)
+works without it. Deploy (or reuse the existing testnet deployment below) when
 you want the indexer to discover contracts from a live on-chain manifest
 instead of (or in addition to) a static `INDEXED_CONTRACT_IDS` list.
 
-## Prerequisites
+## Already deployed on testnet
+
+```
+Contract ID: CAYUDQPV3RKPM3EXDFGI3457FV677JLUCJ4OLKWGCUBPRIHYKXK3WFAZ
+Admin:       GBWKFFXZ5CJESIHP2EOID5IOXMF472RO5XOJ36X475D5LJGI3AF5R5KY
+```
+
+It has one demo entry (itself), registered to verify indexer discovery
+end-to-end. Point `lumina-backend` at it directly — see that repo's README
+for the `REGISTRY_CONTRACT_ID` / `REGISTRY_READ_ACCOUNT` env vars — or deploy
+your own following the steps below.
+
+## Deploying your own
+
+### Prerequisites
 
 - [Stellar CLI](https://developers.stellar.org/docs/tools/stellar-cli) (`stellar`, formerly `soroban`)
 - A funded testnet identity
@@ -14,33 +28,38 @@ instead of (or in addition to) a static `INDEXED_CONTRACT_IDS` list.
 stellar keys generate lumina-deployer --network testnet --fund
 ```
 
-## Build and deploy
+### Build and deploy
 
 ```bash
 stellar contract build
 stellar contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/lumina_registry.wasm \
+  --wasm target/wasm32v1-none/release/lumina_registry.wasm \
   --source lumina-deployer \
-  --network testnet
+  --network testnet \
+  --alias lumina-registry
 ```
 
 This prints the deployed contract's `C...` address — save it as `REGISTRY_CONTRACT_ID`.
+If the deploy step fails with `HostError: Error(Storage, MissingValue)` /
+"Wasm does not exist", that's just RPC propagation lag after the upload —
+rerun the same `deploy` command a few seconds later; it skips re-uploading
+and picks up from the create-contract step.
 
-## Initialize
+### Initialize
 
 ```bash
 stellar contract invoke \
-  --id <REGISTRY_CONTRACT_ID> \
+  --id lumina-registry \
   --source lumina-deployer \
   --network testnet \
   -- initialize --admin <your-address-G...>
 ```
 
-## Register a contract for indexing
+### Register a contract for indexing
 
 ```bash
 stellar contract invoke \
-  --id <REGISTRY_CONTRACT_ID> \
+  --id lumina-registry \
   --source lumina-deployer \
   --network testnet \
   -- register_contract \
@@ -50,13 +69,18 @@ stellar contract invoke \
   --description "A DeFi protocol on Stellar"
 ```
 
+### Verify discovery works
+
+```bash
+stellar contract invoke \
+  --id lumina-registry \
+  --source lumina-deployer \
+  --network testnet \
+  -- get_active_contracts --offset 0 --limit 10
+```
+
 ## What's next
 
-[lumina-backend](https://github.com/Lumeeena/lumina-backend)'s Soroban event
-indexing (`SOROBAN_RPC_URL` + `INDEXED_CONTRACT_IDS`, see `indexer/src/index.ts`
-in that repo) currently takes a static, manually-curated contract ID list.
-`get_active_contracts(offset, limit)` on the deployed registry is
-ready to be polled to populate that list automatically — that wiring
-(indexer → Soroban RPC `simulateTransaction` → registry → merge into the
-indexed set) is the one piece intentionally left for a follow-up, since it
-needs a real deployed registry to develop and verify against.
+`get_contracts_by_owner` and `update_metadata` are still unimplemented
+(`registry/src/lib.rs` has the TODOs). Neither blocks indexer discovery,
+which only needs `get_active_contracts`.

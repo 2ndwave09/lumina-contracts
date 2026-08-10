@@ -27,7 +27,13 @@ cargo test
 
 ## Deploying
 
-Not yet deployed to any network. See [DEPLOY.md](./DEPLOY.md) for testnet deployment steps and what wiring remains on the indexer side afterward.
+Deployed on **testnet** at:
+
+```
+CAYUDQPV3RKPM3EXDFGI3457FV677JLUCJ4OLKWGCUBPRIHYKXK3WFAZ
+```
+
+[lumina-backend](https://github.com/Lumeeena/lumina-backend)'s indexer polls this contract for discovery when configured with `REGISTRY_CONTRACT_ID` (see that repo's README). See [DEPLOY.md](./DEPLOY.md) for the deployment steps used, and how to register your own contract.
 
 ## License
 
