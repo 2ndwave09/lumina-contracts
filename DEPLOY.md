@@ -79,8 +79,43 @@ stellar contract invoke \
   -- get_active_contracts --offset 0 --limit 10
 ```
 
-## What's next
+### Manage your registration
 
-`get_contracts_by_owner` and `update_metadata` are still unimplemented
-(`registry/src/lib.rs` has the TODOs). Neither blocks indexer discovery,
-which only needs `get_active_contracts`.
+List everything one address has registered (deactivated entries included):
+
+```bash
+stellar contract invoke \
+  --id lumina-registry \
+  --source lumina-deployer \
+  --network testnet \
+  -- get_contracts_by_owner \
+  --owner <owner-address-G...> --offset 0 --limit 10
+```
+
+Correct a name or description — only the registered owner can do this:
+
+```bash
+stellar contract invoke \
+  --id lumina-registry \
+  --source lumina-deployer \
+  --network testnet \
+  -- update_metadata \
+  --owner <owner-address-G...> \
+  --contract_id <target-contract-C...> \
+  --name "My Protocol" \
+  --description "An updated description"
+```
+
+Hand the registration to a new key — callable by the current owner or the
+admin:
+
+```bash
+stellar contract invoke \
+  --id lumina-registry \
+  --source lumina-deployer \
+  --network testnet \
+  -- transfer_ownership \
+  --caller <current-owner-G...> \
+  --contract_id <target-contract-C...> \
+  --new_owner <new-owner-G...>
+```
