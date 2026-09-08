@@ -18,6 +18,15 @@ registry.register_contract(owner, contract_id, "My Protocol", "A DeFi protocol o
 
 `get_active_contracts(offset, limit)` returns a paginated list of active registrations for discovery.
 
+Registrations are also manageable after the fact:
+
+| Method | Who can call it |
+| --- | --- |
+| `get_contracts_by_owner(owner, offset, limit)` | anyone — paginated, includes the owner's deactivated entries |
+| `update_metadata(owner, contract_id, name, description)` | the registered owner only |
+| `transfer_ownership(caller, contract_id, new_owner)` | the current owner or the admin |
+| `deactivate(caller, contract_id)` | the current owner or the admin |
+
 ## Build & Test
 
 ```bash
