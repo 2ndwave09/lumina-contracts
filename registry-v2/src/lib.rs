@@ -1,3 +1,5 @@
+// Copyright (c) Lumina contributors
+// SPDX-License-Identifier: MIT
 #![no_std]
 #![warn(missing_docs)]
 //! Lumina Registry v2 — the upgrade target used by the registry's upgrade tests.
