@@ -1,4 +1,5 @@
-//! Review reentrancy across the token transfer boundary.
+// Copyright (c) Lumina contributors
+// SPDX-License-Identifier: MIT
 //! Guards the registry's exported interface and v2 upgrade fixture against unreviewed changes.
 //!
 //! The interface — every exported function signature and every type and error
@@ -29,7 +30,7 @@
 //! quietly stops testing anything. When a storage type changes, update the
 //! fixture deliberately and regenerate its snapshot:
 //!
-//! 
+//!
 
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::xdr::{ScSpecEntry, ScSpecTypeDef, ScSpecUdtUnionCaseV0};
@@ -59,7 +60,11 @@ fn render_type(ty: &ScSpecTypeDef) -> String {
         ),
         ScSpecTypeDef::Tuple(t) => format!(
             "({})",
-            t.value_types.iter().map(render_type).collect::<Vec<_>>().join(", ")
+            t.value_types
+                .iter()
+                .map(render_type)
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         ScSpecTypeDef::BytesN(b) => format!("BytesN<{}>", b.n),
         ScSpecTypeDef::Udt(u) => u.name.to_utf8_string_lossy(),
@@ -78,7 +83,13 @@ fn render_interface(entries: &[ScSpecEntry]) -> String {
                 let args = f
                     .inputs
                     .iter()
-                    .map(|i| format!("{}: {}", i.name.to_utf8_string_lossy(), render_type(&i.type_)))
+                    .map(|i| {
+                        format!(
+                            "{}: {}",
+                            i.name.to_utf8_string_lossy(),
+                            render_type(&i.type_)
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 let ret = match f.outputs.first() {
@@ -91,7 +102,13 @@ fn render_interface(entries: &[ScSpecEntry]) -> String {
                 let fields = s
                     .fields
                     .iter()
-                    .map(|f| format!("{}: {}", f.name.to_utf8_string_lossy(), render_type(&f.type_)))
+                    .map(|f| {
+                        format!(
+                            "{}: {}",
+                            f.name.to_utf8_string_lossy(),
+                            render_type(&f.type_)
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("struct {} {{ {} }}", s.name.to_utf8_string_lossy(), fields)
@@ -105,7 +122,11 @@ fn render_interface(entries: &[ScSpecEntry]) -> String {
                         ScSpecUdtUnionCaseV0::TupleV0(t) => format!(
                             "{}({})",
                             t.name.to_utf8_string_lossy(),
-                            t.type_.iter().map(render_type).collect::<Vec<_>>().join(", ")
+                            t.type_
+                                .iter()
+                                .map(render_type)
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         ),
                     })
                     .collect::<Vec<_>>()
@@ -140,7 +161,13 @@ fn render_interface(entries: &[ScSpecEntry]) -> String {
 
 #[test]
 fn exported_interface_matches_snapshot() {
-    let wasm_path = manifest_path(&["..", "target", "wasm32v1-none", "release", "lumina_registry.wasm"]);
+    let wasm_path = manifest_path(&[
+        "..",
+        "target",
+        "wasm32v1-none",
+        "release",
+        "lumina_registry.wasm",
+    ]);
     let wasm = std::fs::read(&wasm_path).unwrap_or_else(|e| {
         panic!(
             "cannot read {} ({e}). Run `cargo build --target wasm32v1-none --release` first.",
