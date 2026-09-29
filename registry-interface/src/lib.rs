@@ -381,9 +381,12 @@ pub enum RegistryError {
     InvalidAttestation = 27,
     /// The caller has no attestation to revoke on this registration.
     AttestationNotFound = 28,
-    /// A proposed treasury or stake-token address is itself a registered
-    /// contract, so a registration would be its own counterparty.
-    OverlappingAddress = 29,
+    /// The contract's real token balance is lower than the sum of all tracked
+    /// stakes, so the slash would transfer tokens the contract does not hold.
+    ///
+    /// Caused by accounting drift (fee-on-transfer token, direct drain, or a
+    /// rounding bug).  Fee-on-transfer tokens are unsupported by design.
+    ContractBalanceInsufficient = 29,
 }
 
 /// A governance proposal.
