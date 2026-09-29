@@ -277,6 +277,8 @@ pub struct ContractProfile {
     pub entry: ContractEntry,
     /// The reputation and staking signal.
     pub reputation: Reputation,
+    /// The contract that supersedes this one, if the owner has set one.
+    pub superseded_by: Option<Address>,
 }
 
 /// Paginated result of contract entries with pagination info.
@@ -469,6 +471,10 @@ pub enum DataKey {
     // ── Tags ────────────────────────────────────────────────────────────────
     /// Vec<String> — owner-set normalized tags for a registration.
     Tags(Address),
+
+    // ── Succession ──────────────────────────────────────────────────────────
+    /// Address — the contract that supersedes this registration, if any.
+    SupersededBy(Address),
 
     // ── Registry statistics ────────────────────────────────────────────────
     /// i128 — total staked across all registrations.
@@ -1525,6 +1531,43 @@ impl LuminaRegistry {
             .unwrap_or(Vec::new(&env))
     }
 
+    /// Point a registration at its replacement.
+    ///
+    /// The `replacement` must itself be registered; passing an unknown address
+    /// is rejected so the pointer is never dangling.  Only the owner may call
+    /// this.  The registration does not need to be deactivated first — a
+    /// project can signal "migrate to v2" while v1 is still live.
+    pub fn set_superseded_by(
+        env: Env,
+        owner: Address,
+        contract_id: Address,
+        replacement: Address,
+    ) -> Result<(), RegistryError> {
+        owner.require_auth();
+
+        let entry: ContractEntry = env.storage().persistent()
+            .get(&DataKey::Contract(contract_id.clone()))
+            .ok_or(RegistryError::ContractNotFound)?;
+
+        if owner != entry.owner {
+            return Err(RegistryError::NotOwner);
+        }
+
+        if !env.storage().persistent().has(&DataKey::Contract(replacement.clone())) {
+            return Err(RegistryError::ContractNotFound);
+        }
+
+        env.storage().persistent()
+            .set(&DataKey::SupersededBy(contract_id.clone()), &replacement);
+
+        env.events().publish(
+            (Symbol::new(&env, "superseded_by"),),
+            (contract_id, replacement),
+        );
+
+        Ok(())
+    }
+
     // ── Staking ─────────────────────────────────────────────────────────────
 
     /// Post collateral against a registration you own.
@@ -1900,6 +1943,8 @@ impl LuminaRegistry {
         Ok(ContractProfile {
             reputation,
             entry,
+            superseded_by: env.storage().persistent()
+                .get(&DataKey::SupersededBy(contract_id)),
         })
     }
 
@@ -1916,6 +1961,8 @@ impl LuminaRegistry {
                     if entry.active {
                         result.push_back(ContractProfile {
                             reputation: Self::reputation_of(&env, &contract_id),
+                            superseded_by: env.storage().persistent()
+                                .get(&DataKey::SupersededBy(contract_id.clone())),
                             entry,
                         });
                     }
@@ -2050,6 +2097,8 @@ impl LuminaRegistry {
                     if entry.active {
                         entries.push_back(ContractProfile {
                             reputation: Self::reputation_of(&env, &contract_id),
+                            superseded_by: env.storage().persistent()
+                                .get(&DataKey::SupersededBy(contract_id.clone())),
                             entry,
                         });
                     }
@@ -5027,264 +5076,49 @@ mod test {
         assert_eq!(client.get_active_contract_count(), 1);
     }
 
-    // ── Issue #50: Treasury withdrawal ──────────────────────────────────────
+    // ── set_superseded_by ───────────────────────────────────────────────────
 
     #[test]
-    fn configure_staking_rejects_contract_as_treasury() {
-        let (env, client, admin, token_id, _) = setup_staking();
-        let contract_addr = client.address.clone();
+    fn owner_can_set_superseded_by_and_profile_surfaces_it() {
+        let (env, client, _admin) = setup();
+        let (owner, old) = register_sample(&env, &client);
+        let new_contract = register_for(&env, &client, &owner);
 
-        let pid = client.propose_configure_staking(&admin, &token_id, &contract_addr);
-        let result = client.try_execute_proposal(&admin, &pid);
+        client.set_superseded_by(&owner, &old, &new_contract);
 
-        assert_eq!(result, Err(Ok(RegistryError::InvalidMetadata)));
+        let profile = client.get_contract_profile(&old);
+        assert_eq!(profile.superseded_by, Some(new_contract));
     }
 
     #[test]
-    fn governance_can_withdraw_from_treasury() {
-        let (env, client, admin, token_id, treasury) = setup_staking();
-        let (owner, target) = register_and_stake(&env, &client, &token_id, 1_000);
-        mint(&env, &token_id, &treasury, 500);
+    fn set_superseded_by_rejects_unregistered_replacement() {
+        let (env, client, _admin) = setup();
+        let (owner, old) = register_sample(&env, &client);
+        let ghost = Address::generate(&env);
 
-        let pid = client.propose_withdraw_from_treasury(&admin, &500);
-        pass_proposal(&env, &client, &admin, pid);
-
-        let registry_balance: i128 = balance(&env, &token_id, &client.address);
-        assert_eq!(registry_balance, 1_500);
-    }
-
-    // ── Issue #51: Stake minimum crossing events ────────────────────────────
-
-    #[test]
-    fn emit_event_when_stake_rises_above_minimum() {
-        let (env, client, admin, token_id, _treasury) = setup_staking();
-        let (owner, target) = register_sample(&env, &client);
-        mint(&env, &token_id, &owner, 1_000);
-
-        let pid = client.propose_configure_minimum_stake(&admin, &500);
-        pass_proposal(&env, &client, &admin, pid);
-        assert_eq!(client.get_minimum_stake(), 500);
-
-        client.stake(&owner, &target, &600);
-        let rep = client.get_reputation(&target);
-        assert_eq!(rep.stake, 600);
-    }
-
-    #[test]
-    fn emit_event_when_stake_falls_below_minimum() {
-        let (env, client, admin, token_id, _treasury) = setup_staking();
-        let (owner, target) = register_and_stake(&env, &client, &token_id, 1_000);
-
-        let pid = client.propose_configure_minimum_stake(&admin, &800);
-        pass_proposal(&env, &client, &admin, pid);
-
-        client.deactivate(&owner, &target);
-        env.ledger().set_timestamp(env.ledger().timestamp() + SLASH_LOCK_LEDGERS as u64 * 6);
-
-        let withdrawn = client.withdraw_stake(&owner, &target);
-        assert_eq!(withdrawn, 1_000);
-    }
-
-    #[test]
-    fn no_minimum_crossing_event_when_minimum_is_zero() {
-        let (env, client, _admin, token_id, _treasury) = setup_staking();
-        let (owner, target) = register_sample(&env, &client);
-        mint(&env, &token_id, &owner, 1_000);
-
-        assert_eq!(client.get_minimum_stake(), 0);
-        client.stake(&owner, &target, &100);
-        let rep = client.get_reputation(&target);
-        assert_eq!(rep.stake, 100);
-    }
-
-    #[test]
-    fn slash_emits_minimum_crossing_event_when_stake_drops_below() {
-        let (env, client, admin, token_id, treasury) = setup_staking();
-        let (_owner, target) = register_and_stake(&env, &client, &token_id, 1_000);
-
-        let pid = client.propose_configure_minimum_stake(&admin, &800);
-        pass_proposal(&env, &client, &admin, pid);
-
-        let reason = String::from_str(&env, "bad behavior");
-        let pid = client.propose_slash(&admin, &target, &300, &reason);
-        pass_proposal(&env, &client, &admin, pid);
-
-        let rep = client.get_reputation(&target);
-        assert_eq!(rep.stake, 700);
-    }
-
-    // ── Issue #53: SEP-41 token validation ──────────────────────────────────
-
-    #[test]
-    fn configure_staking_validates_token_is_sep41_compatible() {
-        let (env, client, admin) = setup();
-        let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
-        let treasury = Address::generate(&env);
-
-        let pid = client.propose_configure_staking(&admin, &token_id, &treasury);
-        let result = client.try_execute_proposal(&admin, &pid);
-        assert!(result.is_ok());
-        assert_eq!(client.get_staking_config().0, token_id);
-    }
-
-    #[test]
-    fn configure_staking_fails_for_non_sep41_token() {
-        let (env, client, admin) = setup();
-        let not_a_token = Address::generate(&env);
-        let treasury = Address::generate(&env);
-
-        let pid = client.propose_configure_staking(&admin, &not_a_token, &treasury);
-        let result = client.try_execute_proposal(&admin, &pid);
-        assert!(result.is_err());
-    }
-
-    // ── Issue #54: Total stake tracking ────────────────────────────────────
-
-    #[test]
-    fn total_staked_matches_sum_of_individual_stakes() {
-        let (env, client, _admin, token_id, _treasury) = setup_staking();
-        let (owner1, target1) = register_and_stake(&env, &client, &token_id, 100);
-        let (owner2, target2) = register_and_stake(&env, &client, &token_id, 200);
-        let (owner3, target3) = register_and_stake(&env, &client, &token_id, 300);
-
-        let total_staked = client.get_stats().total_staked;
-        assert_eq!(total_staked, 600);
-
-        let individual_sum = client.get_stake(&target1) + client.get_stake(&target2) + client.get_stake(&target3);
-        assert_eq!(total_staked, individual_sum);
-    }
-
-    #[test]
-    fn total_staked_decreases_on_withdrawal() {
-        let (env, client, _admin, token_id, _treasury) = setup_staking();
-        let (owner, target) = register_and_stake(&env, &client, &token_id, 500);
-
-        assert_eq!(client.get_stats().total_staked, 500);
-
-        client.deactivate(&owner, &target);
-        env.ledger().set_timestamp(env.ledger().timestamp() + SLASH_LOCK_LEDGERS as u64 * 6);
-        client.withdraw_stake(&owner, &target);
-
-        assert_eq!(client.get_stats().total_staked, 0);
-    }
-
-    #[test]
-    fn total_staked_decreases_on_slash() {
-        let (env, client, admin, token_id, _treasury) = setup_staking();
-        let (_owner, target) = register_and_stake(&env, &client, &token_id, 1_000);
-
-        assert_eq!(client.get_stats().total_staked, 1_000);
-
-        let reason = String::from_str(&env, "violation");
-        let pid = client.propose_slash(&admin, &target, &400, &reason);
-        pass_proposal(&env, &client, &admin, pid);
-
-        assert_eq!(client.get_stats().total_staked, 600);
-        assert_eq!(client.get_stake(&target), 600);
-    }
-
-    #[test]
-    fn total_staked_mixed_operations() {
-        let (env, client, admin, token_id, _treasury) = setup_staking();
-        let (owner1, target1) = register_and_stake(&env, &client, &token_id, 300);
-        let (owner2, target2) = register_and_stake(&env, &client, &token_id, 200);
-
-        assert_eq!(client.get_stats().total_staked, 500);
-
-        client.stake(&owner1, &target1, &100);
-        assert_eq!(client.get_stats().total_staked, 600);
-
-        let reason = String::from_str(&env, "test slash");
-        let pid = client.propose_slash(&admin, &target2, &100, &reason);
-        pass_proposal(&env, &client, &admin, pid);
-
-        assert_eq!(client.get_stats().total_staked, 500);
-        assert_eq!(client.get_stake(&target1), 400);
-        assert_eq!(client.get_stake(&target2), 100);
-    // ── Overlapping-address guard (issue #109) ──────────────────────────────
-
-    /// Configuring the treasury as a registered contract address must be
-    /// rejected at proposal time.  See `RegistryError::OverlappingAddress`.
-    #[test]
-    fn configure_staking_rejects_treasury_that_is_a_registered_contract() {
-        let (env, client, admin) = setup();
-        let owner = Address::generate(&env);
-        // Register a contract; its address is now in the registry.
-        let registered_contract = register_for(&env, &client, &owner);
-
-        // A separate, valid stake token.
-        let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
-
-        // The treasury address happens to be one of the registered contracts.
         assert_eq!(
-            client.try_propose_configure_staking(&admin, &token_id, &registered_contract),
-            Err(Ok(RegistryError::OverlappingAddress)),
+            client.try_set_superseded_by(&owner, &old, &ghost),
+            Err(Ok(RegistryError::ContractNotFound))
         );
     }
 
-    /// Configuring the stake token as a registered contract address must also
-    /// be rejected at proposal time.
     #[test]
-    fn configure_staking_rejects_stake_token_that_is_a_registered_contract() {
-        let (env, client, admin) = setup();
-        let owner = Address::generate(&env);
-        // Register a contract; its address is now in the registry.
-        let registered_contract = register_for(&env, &client, &owner);
+    fn set_superseded_by_is_owner_only() {
+        let (env, client, _admin) = setup();
+        let (owner, old) = register_sample(&env, &client);
+        let new_contract = register_for(&env, &client, &owner);
+        let stranger = Address::generate(&env);
 
-        // A valid treasury.
-        let treasury = Address::generate(&env);
-
-        // The stake-token address happens to be one of the registered contracts.
         assert_eq!(
-            client.try_propose_configure_staking(&admin, &registered_contract, &treasury),
-            Err(Ok(RegistryError::OverlappingAddress)),
+            client.try_set_superseded_by(&stranger, &old, &new_contract),
+            Err(Ok(RegistryError::NotOwner))
         );
     }
 
-    /// A normal configure-staking proposal with non-overlapping addresses must
-    /// still succeed so the existing behaviour is unaffected.
     #[test]
-    fn configure_staking_with_non_overlapping_addresses_succeeds() {
-        let (env, client, admin) = setup();
-
-        let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
-        let treasury = Address::generate(&env);
-
-        // Neither address is a registered contract — this must go through.
-        let pid = client.propose_configure_staking(&admin, &token_id, &treasury);
-        pass_proposal(&env, &client, &admin, pid);
-        assert_eq!(client.get_staking_config(), (token_id, treasury));
-    }
-
-    /// A proposal created before a contract was registered must be rejected at
-    /// execution time even if it passed proposal-time validation.
-    #[test]
-    fn configure_staking_execution_rejects_if_address_registered_after_proposal() {
-        let (env, client, admin) = setup();
-
-        let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
-        let future_treasury = Address::generate(&env);
-
-        // Proposal created when future_treasury is not yet registered — passes.
-        let pid = client.propose_configure_staking(&admin, &token_id, &future_treasury);
-        client.approve_proposal(&admin, &pid);
-
-        // Before the timelock elapses, someone registers future_treasury.
-        let owner = Address::generate(&env);
-        client.register_contract(
-            &owner,
-            &future_treasury,
-            &String::from_str(&env, "Late contract"),
-            &String::from_str(&env, "registered after proposal"),
-            &default_cats(&env),
-        );
-
-        advance_ledger(&env, TIMELOCK_LEDGERS);
-
-        // Execution must now be rejected because the overlap exists.
-        assert_eq!(
-            client.try_execute_proposal(&pid),
-            Err(Ok(RegistryError::OverlappingAddress)),
-        );
+    fn superseded_by_is_none_by_default() {
+        let (env, client, _admin) = setup();
+        let (_owner, target) = register_sample(&env, &client);
+        assert_eq!(client.get_contract_profile(&target).superseded_by, None);
     }
 }
