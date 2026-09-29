@@ -1,11 +1,11 @@
 # Registry Events Reference
 
-Events are the integration surface for downstream consumers, serving as the interface for both `lumina-backend`'s indexer and `lumina-frontend`'s registry history view.
+Events are the integration surface for downstream consumers, serving as the interface for both `lumina-backend`s indexer and `lumina-frontend`s registry history view.
 
 ## Downstream Consumers
 
-- **Registry History (`lumina-frontend`)**: The frontend's history view rebuilds the per-contract event timeline by matching on the **first topic** (which must be the event name) and treating the **first data slot** as the subject ID (`contract_id`). Any events matching this shape will be attributed to the respective contract's history. Unknown topics will still be displayed as generic "Registry event" rows.
-- **Indexer (`lumina-backend`)**: The backend indexer discovers contracts and listens to registry events to keep its database synchronized with the on-chain manifest. It specifically looks for registration, deactivation, and metadata/category changes to maintain an up-to-date registry graph.
+- `Registry History (`lumina-frontend`)`: The frontend's history view rebuilds the per-contract event timeline by matching on the **first topic** (which must be the event name) and treating the **first data slot** as the subject ID (`contract_id`). Any events matching this shape will be attributed to the respective contract's history. Unknown topics will still be displayed as generic "Registry event" rows.
+- `Indexer (`lumina-backend`)`: The backend indexer discovers contracts and listens to registry events to keep its database synchronized with the on-chain manifest. It specifically looks for registration, deactivation, and metadata/category changes to maintain an up-to-date registry graph.
 
 ## Events
 
@@ -17,8 +17,9 @@ Events are the integration surface for downstream consumers, serving as the inte
 | `proposal_executed` | `(proposal_id: u32, executed_at: u64)` | When a ready proposal is executed after the timelock elapses. | | `execute_proposal_applies_action` |
 | `contract_deactivated` | `(contract_id: Address, caller: Address)` or `(contract_id: Address, Symbol("governance"))` | When a contract is deactivated by its owner or governance. | Indexer, History | `deactivate_requires_contract_owner` |
 | `contract_deregistered` | `(contract_id: Address, owner: Address)` | When a deactivated and unstaked contract is fully deregistered. | Indexer, History | `deregister_removes_every_index_reference...` |
-| `contract_registered` | `(contract_id: Address, owner: Address, name: String, categories: Vec<String>)` | When a new contract is registered to the manifest. | Indexer, History | `registration_records_its_categories` |
-| `categories_updated` | `(contract_id: Address, owner: Address, categories: Vec<String>)` | When a contract's categories are updated by its owner. | Indexer, History | `set_categories_moves_a_registration_between_categories` |
+| `contract_registered` | `(contract_id: Address, owner: Address, name: String, categories: Vec<String>)``| When a new contract is registered to the manifest. | Indexer, History | `registration_records_its_categories` |
+| `categories_updated` | `(contract_id: Address, owner: Address, categories: Vec<String>)d | When a contract's categories are updated by its owner. | Indexer, History | `set_categories_moves_a_registration_between_categories` |
+| `category_migrated` | `(from: String, to: String, migrated: u32, cursor: u32, done: bool)` | When governance remaps a category to another across every registration, in resumable batches. | Indexer, History | `migrate_category_moves_every_registration` |
 | `tags_updated` | `(contract_id: Address, owner: Address, tags_len: u32)` | When a contract's tags are updated by its owner. | History | `tags_are_updated_and_returned` |
 | `metadata_updated` | `(contract_id: Address, owner: Address, name: String)` | When the contract's metadata (name) is updated. | Indexer, History | `update_metadata_succeeds_with_real_owner_signature` |
 | `ownership_transferred`| `(contract_id: Address, previous_owner: Address, new_owner: Address)` | When the contract's ownership is transferred to a new address. | History | `ownership_transfer_preserves_stake_and_verification` |

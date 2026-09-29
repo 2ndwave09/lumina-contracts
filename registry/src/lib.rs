@@ -180,6 +180,8 @@ pub enum RegistryError {
     InvalidAttestation = 27,
     /// The caller has no attestation to revoke on this registration.
     AttestationNotFound = 28,
+    /// The migration cursor is out of range for the current category.
+    InvalidCursor = 29,
 }
 
 // ─── Storage shapes ────────────────────────────────────────────────────────
