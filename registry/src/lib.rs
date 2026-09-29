@@ -180,8 +180,6 @@ pub enum RegistryError {
     InvalidAttestation = 27,
     /// The caller has no attestation to revoke on this registration.
     AttestationNotFound = 28,
-    /// The migration cursor is out of range for the current category.
-    InvalidCursor = 29,
 }
 
 // ─── Storage shapes ────────────────────────────────────────────────────────
@@ -458,6 +456,8 @@ pub enum ProposalAction {
     ConfigureMinimumStake(i128),
     /// Withdraw from the treasury.
     WithdrawFromTreasury(i128),
+    /// Remap every registration from one category to another: `(from, to)`.
+    MigrateCategory(Category, Category),
 }
 
 /// Fixed-window registration counter for one owner.
