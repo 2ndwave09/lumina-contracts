@@ -332,24 +332,30 @@ pub enum RegistryError {
     InvalidStake = 16,
     /// The stake is insufficient for the requested operation.
     InsufficientStake = 17,
-    /// The category list is empty.
-    NoCategories = 18,
-    /// The category is not recognized.
-    InvalidCategory = 19,
-    /// The caller is not the owner of the registration.
-    NotOwner = 20,
-    /// The registration is not active.
-    NotActive = 21,
-    /// The registration is already verified.
-    AlreadyVerified = 22,
-    /// The registration is not verified.
-    NotVerified = 23,
-    /// The slash amount is invalid.
-    InvalidSlash = 24,
-    /// The registration cannot be deregistered while staked.
-    Staked = 25,
-    /// The token transfer failed.
-    TransferFailed = 26,
+    /// The stake is still inside the post-slash lock window.
+    StakeLocked = 18,
+    /// The registration is still active — deactivate before withdrawing.
+    RegistrationActive = 19,
+    /// A registration must declare at least one category.
+    NoCategories = 20,
+    /// The registration still holds stake — withdraw it before deregistering.
+    StakeNotEmpty = 21,
+    /// The registration rate limit configuration is invalid.
+    InvalidRateLimit = 22,
+    /// The owner is not allowlisted for registration.
+    NotAllowlisted = 23,
+    /// The registration rate limit has been exceeded.
+    RegistrationRateLimited = 24,
+    /// Registration fee was not paid.
+    InsufficientFee = 25,
+    /// Tag count or length exceeds bounds.
+    InvalidTags = 26,
+    /// The specified slash record does not exist (invalid index).
+    SlashNotFound = 29,
+    /// This slash already has a response attached.
+    ResponseAlreadyExists = 30,
+    /// Input validation failed (e.g., empty response).
+    InvalidInput = 31,
 }
 
 /// A governance proposal.
@@ -396,35 +402,18 @@ pub enum ProposalAction {
     SetRegistrationFee(i128),
 }
 
-/// A category a registration can be filed under.
-///
-/// Duplicated from `lumina-registry`.
-Ncontracttype]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum Category {
-    /// A wallet.
-    Wallet = 1,
-    /// A dex.
-    Dex = 2,
-    /// A lending protocol.
-    Lending = 3,
-    /// A stablecoin.
-    Stablecoin = 4,
-    /// A bridge.
-    Bridge = 5,
-    /// An oracle.
-    Oracle = 6,
-    /// A governance contract.
-    Governance = 7,
-    /// A gaming contract.
-    Gaming = 8,
-    /// An NFT.
-    NFT = 9,
-    /// A metaverse contract.
-    Metaverse = 10,
-    /// Other.
-    Other = 11,
+/// Byte-compatible with `lumina_registry::SlashRecord`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlashRecord {
+    /// How much stake was taken.
+    pub amount: i128,
+    /// Why governance slashed — recorded on-chain for accountability.
+    pub reason: String,
+    /// Ledger at which the slash executed.
+    pub slashed_at: u32,
+    /// Owner's optional response to the slash.
+    pub response: Option<String>,
 }
 
 /// A registration entry.
