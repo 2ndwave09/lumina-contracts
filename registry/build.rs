@@ -1,16 +1,15 @@
 // Copyright (c) Lumina contributors
 // SPDX-License-Identifier: MIT
-//! Turns a missing upgrade-test fixture into a message that says what to run.
-//!
-//! The upgrade tests in `src/lib.rs` deploy the registry from its compiled
-//! wasm, so `cargo test` needs `cargo build --target wasm32v1-none --release`
-//! to have run first. Without this script the only symptom is `contractimport!`
-//! reporting `No such file or directory` with no path and no remedy.
-//!
-//! It also guards the hand-maintained `registry-v2` upgrade fixture: the
-//! duplicated v2 storage types must match the real ones field-for-field,
-//! otherwise the fixture silently stops testing anything.
-
+/// Turns a missing upgrade-test fixture into a message that says what to run.
+///
+/// The upgrade tests in `src/lib.rs` deploy the registry from its compiled
+/// wasm, so `cargo test` needs `cargo build --target wasm32v1-none --release`
+/// to have run first. Without this script the only symptom is `contractimport!`
+/// reporting `No such file or directory` with no path and no remedy.
+///
+/// It also guards the hand-maintained `registry-v2` upgrade fixture: the
+/// duplicated v2 storage types must match the real ones field-for-field,
+/// otherwise the fixture silently stops testing anything.
 use std::path::PathBuf;
 
 const FIXTURES: [&str; 2] = ["lumina_registry.wasm", "lumina_registry_v2.wasm"];
@@ -243,7 +242,7 @@ fn check_v2_types_in_sync() {
                     println!(
                         "cargo::warning=could not locate `{type_name}` in {}. \
                          The `registry-v2` check needs this type to compare against {}. \
-                         Update TYPE_PACKAGES in build.rs if it was renamed or moved.",
+                         Update the check in build.rs if the type was renamed or moved.",
                         canonical, duplicate,
                     );
                     failed = true;
