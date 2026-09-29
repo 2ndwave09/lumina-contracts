@@ -200,8 +200,10 @@ was typed into a form:
 | `get_active_profiles(offset, limit)` | anyone — `get_active_contracts` with reputation attached |
 | `get_stake` / `is_verified` / `get_slashes` / `get_staking_config` | anyone |
 
-Verified status has no non-governance path: a registrant cannot attest their own
-contract, which is the entire value of the signal. Slashes move stake to the
+Verified status has no non-governance path: a registrant cannot verify their own
+contract, which is the entire value of the signal. (Permissionless third-party
+`attest` exists and is documented below, but it records a separate, weaker claim
+and cannot reach `Verified`.) Slashes move stake to the
 treasury and record their reason on-chain permanently, so a penalty stays
 auditable long after the stake it was taken from is gone.
 
@@ -216,78 +218,36 @@ SEP-41 token (native XLM via its Stellar Asset Contract works) and a treasury.
 Routing that through governance rather than `initialize` means the already-live
 registry can adopt staking after an upgrade instead of being redeployed.
 
-## Consuming the registry from another contract
+### Third-party attestations
 
-Everything in [Lumina Registry](#lumina-registry) above is callable by any other
-contract, but a Soroban call between contracts needs a typed client, and until
-now writing one meant copying signatures by hand. `registry-interface/` is that
-client, published:
+Any address can vouch for a registration with a short, bounded label. This is a
+transparency feature rather than a trust signal:
 
-```rust
-use lumina_registry_interface::RegistryInterfaceClient;
+| Method | Who can call it |
+| --- | --- |
+| `attest(attester, contract_id, label)` | anyone, including the registration's own owner |
+| `revoke_attestation(attester, contract_id)` | the attester, and only for their own attestation |
+| `get_attestations(contract_id)` | anyone — `(attester, label, created_at)`, oldest first |
 
-let registry = RegistryInterfaceClient::new(&env, &registry_address);
-if registry.is_registered(&some_contract) && registry.is_verified(&some_contract) { /* … */ }
-```
+Two properties are deliberate. The attester's address is recorded on-chain, so a
+claim is attributable rather than anonymous, and the attester can withdraw it
+themselves without asking anyone. And `revoke_attestation` is scoped to the
+caller's own record: no admin, and not even the registration's owner, can remove
+another party's attestation, because a claim should last exactly as long as the
+party making it stands behind it.
 
-The crate declares a `RegistryInterface` trait over the registry's 28 read-only
-entrypoints — the `get_*`/`is_*` functions, nothing mutating — and the types and
-error codes those signatures use. `is_registered` returns `false` rather than
-erroring for an address nobody registered, so an unregistered counterparty is a
-value you branch on, not a revert you unwind; `get_contract` and
-`get_contract_profile` are the strict ones and do error with `ContractNotFound`.
+Attestations are **not** verification and never feed into it. `Verified` remains
+governance-only, set through a threshold-and-timelocked proposal, and there is no
+counter or path by which attaching many attestations could substitute for that —
+so nobody can inflate the verified signal by attaching cheap labels. Consumers
+that want to weight the two differently can, and can surface the attester either
+way.
 
-[examples/registry-consumer/](./examples/registry-consumer) is a small venue
-contract using it for real: it lists a counterparty only if the registry says the
-counterparty is registered, prices deposits by the counterparty's verification
-and stake, and reads everything through the client — including the `try_*`
-variants that return a `Result` instead of panicking on a contract error. Its
-tests deploy the actual registry wasm, so the example is checked against the
-contract as built, not against a mock that agrees with itself.
-
-The interface crate re-declares the registry's types instead of depending on the
-contract crate, which would drag the registry's entire `#[contractimpl]` into
-every consumer's wasm. That duplication is safe only while the two declarations
-agree, so `registry-interface` is tested against the *built wasm's* contract
-spec: a function renamed in the contract without mirroring it in the interface
-fails `cargo test` here, naming the signature that moved. If a change is
-intended, update `registry-interface/src/lib.rs` in the same PR.
-
-## What a cross-contract read costs
-
-"It's only a read" is the reasoning that produces a contract with an accidental
-per-call fee, so the cost is measured rather than assumed.
-`examples/registry-consumer/tests/cost.rs` deploys the real registry wasm and
-prints (with `cargo test -p lumina-registry-consumer-example --test cost -- --nocapture`)
-what the host meters for transactions that read from it:
-
-| transaction | instructions | ledger entries read |
-| --- | --- | --- |
-| no cross-contract call (baseline) | 11,260 | 1 |
-| one `get_version` — one instance key | 9,077,551 | 3 |
-| one `is_registered` | 9,124,508 | 4 |
-| one `get_contract_profile` (entry + reputation) | 9,367,725 | 8 |
-| `is_registered` + `is_verified` — two calls | 18,238,950 | 5 |
-| three calls | 27,360,220 | 5 |
-
-The test asserts the shape of this table so it cannot quietly drift, but read
-the *differences*, not the absolute numbers — fee rates are set by the network
-and change; these relationships do not:
-
-- **Crossing the boundary is the cost.** ~9.07 M of the ~9.12 M instructions in
-  one `is_registered` are the invocation itself; the answer — one `has` against
-  a persistent entry — is ~47 K of them, under 1% of the call.
-- **That fixed charge is per call.** A second call adds ~9.11 M again. A loop
-  over N counterparties is N invocations, not one.
-- **Batch the questions.** One `get_contract_profile` answers registered *and*
-  verified (and stake, and slash history) for ~9.37 M instructions — about 49%
-  cheaper than the two `is_*` calls it replaces. Prefer one rich read over
-  several cheap ones.
-- **Entries are paid once, calls every time.** Reading the same keys three
-  times costs ~27.6 M instructions but no additional ledger entries beyond the
-  second call: re-reading cached state buys nothing and charges per call.
-- **The caller pays.** These ledger reads land in the invoking transaction's
-  resources, whoever triggers it — not on the registry's balance sheet.
+One attestation per attester per registration: re-attesting revises the existing
+label instead of appending, so a stale claim cannot be left behind. Labels are
+bounded to 64 bytes and non-empty, and a registration holds at most 20
+attestations, so the cost of reading a registration's attestations is a property
+of the contract rather than of how many parties choose to speak up.
 
 ## Build & Test
 
