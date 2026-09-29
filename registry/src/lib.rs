@@ -152,15 +152,9 @@ pub const SLASH_LOCK_LEDGERS: u32 = 10;
 /// | 24 | `RegistrationRateLimited` | The per-owner registration rate limit has been exceeded for the current window. | Wait for the current window to elapse, or have governance raise the limit via `propose_configure_registration_rate_limit`. |
 /// | 25 | `InsufficientFee` | The registration fee was not paid. | Ensure the owner holds at least `get_registration_fee()` of the stake token and approves the transfer before registering. |
 /// | 26 | `InvalidTags` | The tag count exceeds 10, or a tag is longer than 16 characters. | Pass at most 10 tags, each at most 16 characters long. |
-/// | 27 | `InvalidAttestation` | Attestation label is empty, too long, or the registration already has the maximum number of attestations. | Shorten label or prune/revoke prior attestations. |
-/// | 28 | `AttestationNotFound` | The caller has no attestation to revoke on this registration. | Verify the attester address before calling revoke. |
-/// | 29 | `OverlappingAddress` | The proposed treasury or stake-token address is itself a registered contract. | Use a separate, dedicated treasury and token address. |
-/// | 30 | `AdminSetTooSmall` | The admin set would have fewer than `MIN_ADMINS` members. | Maintain at least `MIN_ADMINS` (2) admins in the multi-sig set. |
-/// | 31 | `AlreadyAdmin` | The proposed address is already a member of the admin set. | Propose a new, unadded admin address. |
-/// | 32 | `AdminNotFound` | The proposed address to remove is not in the admin set. | Specify an existing admin address from `get_admins`. |
-/// | 33 | `ThresholdAlreadySet` | The proposed threshold is already the current threshold. | Propose a threshold value different from the current one. |
-/// | 34 | `AlreadyVerified` | The proposed verification status matches the contract's current status. | Check `is_verified` before proposing a verification change. |
-/// | 35 | `StakingAlreadyConfigured` | Staking is already configured with the proposed token and treasury. | Propose a different token or treasury to update configuration. |
+/// | 27 | `InvalidAttestation` | Attestation label is empty, too long, or the registration already has the maximum number of attestations. | Pass a non-empty label of at most `MAX_ATTESTATION_LABEL_LEN` bytes, or revoke an existing attestation first. |
+/// | 28 | `AttestationNotFound` | The caller has no attestation to revoke on this registration. | Only the attester themselves can revoke; check `get_attestations` for the caller's address. |
+/// | 29 | `NotManager` | The caller is neither the registered owner nor the owner-appointed manager. | Call from the owner's address, or have the owner appoint the caller via `set_manager`. |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
