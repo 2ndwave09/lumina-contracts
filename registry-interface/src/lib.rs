@@ -381,12 +381,21 @@ pub enum RegistryError {
     InvalidAttestation = 27,
     /// The caller has no attestation to revoke on this registration.
     AttestationNotFound = 28,
-    /// The contract's real token balance is lower than the sum of all tracked
-    /// stakes, so the slash would transfer tokens the contract does not hold.
-    ///
-    /// Caused by accounting drift (fee-on-transfer token, direct drain, or a
-    /// rounding bug).  Fee-on-transfer tokens are unsupported by design.
-    ContractBalanceInsufficient = 29,
+    /// The proposed treasury or stake-token address is itself a registered
+    /// contract.
+    OverlappingAddress = 29,
+    /// The admin set would have fewer than `MIN_ADMINS` members.
+    AdminSetTooSmall = 30,
+    /// The proposed address is already a member of the admin set.
+    AlreadyAdmin = 31,
+    /// The proposed address to remove is not a member of the admin set.
+    AdminNotFound = 32,
+    /// The proposed threshold is already the current threshold.
+    ThresholdAlreadySet = 33,
+    /// The proposed verification status matches the contract's current status.
+    AlreadyVerified = 34,
+    /// Staking is already configured with the proposed token and treasury.
+    StakingAlreadyConfigured = 35,
 }
 
 /// A governance proposal.

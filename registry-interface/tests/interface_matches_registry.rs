@@ -628,7 +628,13 @@ fn interface_error_codes_match_the_registry() {
         (RegistryError::InvalidTags as u32, "InvalidTags"),
         (RegistryError::InvalidAttestation as u32, "InvalidAttestation"),
         (RegistryError::AttestationNotFound as u32, "AttestationNotFound"),
-        (RegistryError::ContractBalanceInsufficient as u32, "ContractBalanceInsufficient"),
+        (RegistryError::OverlappingAddress as u32, "OverlappingAddress"),
+        (RegistryError::AdminSetTooSmall as u32, "AdminSetTooSmall"),
+        (RegistryError::AlreadyAdmin as u32, "AlreadyAdmin"),
+        (RegistryError::AdminNotFound as u32, "AdminNotFound"),
+        (RegistryError::ThresholdAlreadySet as u32, "ThresholdAlreadySet"),
+        (RegistryError::AlreadyVerified as u32, "AlreadyVerified"),
+        (RegistryError::StakingAlreadyConfigured as u32, "StakingAlreadyConfigured"),
     ];
 
     for (code, name) in declared {
