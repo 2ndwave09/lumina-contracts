@@ -445,6 +445,15 @@ pub const MAX_ATTESTATIONS_PER_CONTRACT: u32 = 20;
 /// Maximum length of an attestation label, in bytes.
 pub const MAX_ATTESTATION_LABEL_LEN: u32 = 64;
 
+/// Upper bound for a registration name. This is small enough for UI cards and
+/// large enough for a short human-readable project label without letting a
+/// caller force unbounded storage or rendering cost onto every consumer.
+pub const MAX_NAME_LEN: u32 = 64;
+
+/// Upper bound for a registration description. The limit is intentionally high
+/// enough for a summary while still keeping storage and rendering costs bounded.
+pub const MAX_DESCRIPTION_LEN: u32 = 512;
+
 /// Entry for batch registration.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -666,6 +675,8 @@ pub enum DataKey {
     // ── Tags ────────────────────────────────────────────────────────────────
     /// Vec<String> — owner-set normalized tags for a registration.
     Tags(Address),
+    /// Option<Address> — replacement contract that supersedes this one.
+    SupersededBy(Address),
 
     // ── Succession ──────────────────────────────────────────────────────────
     /// Address — the contract that supersedes this registration, if any.
@@ -1716,6 +1727,8 @@ impl LuminaRegistry {
             return Err(RegistryError::AlreadyRegistered);
         }
 
+        Self::validate_contract_metadata(&name, &description)?;
+
         let categories = Self::dedup_categories(&env, &categories)?;
 
         Self::consume_registration_rate(&env, &owner)?;
@@ -1827,6 +1840,7 @@ impl LuminaRegistry {
             {
                 return Err(RegistryError::AlreadyRegistered);
             }
+            Self::validate_contract_metadata(&entry.name, &entry.description)?;
             Self::dedup_categories(&env, &entry.categories)?;
         }
 
@@ -2745,6 +2759,35 @@ impl LuminaRegistry {
         })
     }
 
+    /// Record that one registration has been superseded by another project.
+    /// The old entry remains in place, but consumers can surface the newer
+    /// contract in the profile and history views.
+    pub fn set_superseded_by(
+        env: Env,
+        owner: Address,
+        old_contract: Address,
+        new_contract: Address,
+    ) -> Result<(), RegistryError> {
+        owner.require_auth();
+
+        let old_entry: ContractEntry = env.storage().persistent()
+            .get(&DataKey::Contract(old_contract.clone()))
+            .ok_or(RegistryError::ContractNotFound)?;
+        if owner != old_entry.owner {
+            return Err(RegistryError::NotOwner);
+        }
+
+        let new_entry: ContractEntry = env.storage().persistent()
+            .get(&DataKey::Contract(new_contract.clone()))
+            .ok_or(RegistryError::ContractNotFound)?;
+        if new_entry.owner != owner {
+            return Err(RegistryError::Unauthorized);
+        }
+
+        env.storage().persistent().set(&DataKey::SupersededBy(old_contract), &new_contract);
+        Ok(())
+    }
+
     /// `get_active_contracts`, with each entry's reputation attached. Same
     /// offset/limit and active-filtering semantics.
     pub fn get_active_profiles(env: Env, offset: u32, limit: u32) -> Vec<ContractProfile> {
@@ -3074,6 +3117,8 @@ impl LuminaRegistry {
             return Err(RegistryError::NotOwner);
         }
 
+        Self::validate_contract_metadata(&name, &description)?;
+
         entry.name = name.clone();
         entry.description = description;
         env.storage()
@@ -3210,6 +3255,25 @@ impl LuminaRegistry {
             .instance()
             .get(&DataKey::Admins)
             .unwrap_or(Vec::new(env))
+    }
+
+    fn validate_contract_metadata(name: &String, description: &String) -> Result<(), RegistryError> {
+        let len = name.len();
+        if name.is_empty() || len > MAX_NAME_LEN {
+            return Err(RegistryError::InvalidMetadata);
+        }
+
+        let mut raw = [0u8; MAX_NAME_LEN as usize];
+        let bytes = &mut raw[..len as usize];
+        name.copy_into_slice(bytes);
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return Err(RegistryError::InvalidMetadata);
+        }
+
+        if description.len() > MAX_DESCRIPTION_LEN {
+            return Err(RegistryError::InvalidMetadata);
+        }
+        Ok(())
     }
 
     /// Return `NotAdmin` if `addr` is not in the current admin set.
@@ -4553,6 +4617,74 @@ mod test {
                 &String::from_str(&env, "X"),
             ),
             Err(Ok(RegistryError::NotOwner))
+        );
+    }
+
+    #[test]
+    fn register_contract_rejects_invalid_metadata() {
+        let (env, client, _admin) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        assert_eq!(
+            client.try_register_contract(
+                &owner,
+                &target,
+                &String::from_str(&env, ""),
+                &String::from_str(&env, "desc"),
+                &soroban_sdk::vec![&env, Category::Other],
+            ),
+            Err(Ok(RegistryError::InvalidMetadata))
+        );
+
+        assert_eq!(
+            client.try_register_contract(
+                &owner,
+                &Address::generate(&env),
+                &String::from_str(&env, "   "),
+                &String::from_str(&env, "desc"),
+                &soroban_sdk::vec![&env, Category::Other],
+            ),
+            Err(Ok(RegistryError::InvalidMetadata))
+        );
+
+        let long_name = "x".repeat((MAX_NAME_LEN + 1) as usize);
+        assert_eq!(
+            client.try_register_contract(
+                &owner,
+                &Address::generate(&env),
+                &String::from_str(&env, &long_name),
+                &String::from_str(&env, "desc"),
+                &soroban_sdk::vec![&env, Category::Other],
+            ),
+            Err(Ok(RegistryError::InvalidMetadata))
+        );
+    }
+
+    #[test]
+    fn update_metadata_rejects_invalid_metadata() {
+        let (env, client, _admin) = setup();
+        let (owner, target) = register_sample(&env, &client);
+
+        assert_eq!(
+            client.try_update_metadata(
+                &owner,
+                &target,
+                &String::from_str(&env, ""),
+                &String::from_str(&env, "desc"),
+            ),
+            Err(Ok(RegistryError::InvalidMetadata))
+        );
+
+        let long_desc = "x".repeat((MAX_DESCRIPTION_LEN + 1) as usize);
+        assert_eq!(
+            client.try_update_metadata(
+                &owner,
+                &target,
+                &String::from_str(&env, "Valid"),
+                &String::from_str(&env, &long_desc),
+            ),
+            Err(Ok(RegistryError::InvalidMetadata))
         );
     }
 
