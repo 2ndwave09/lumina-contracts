@@ -1,4 +1,4 @@
-// Copyright (c) Lumina contributors
+﻿// Copyright (c) Lumina contributors
 // SPDX-License-Identifier: MIT
 #![no_std]
 // Soroban's `#[contracttype]`, `#[contracterror]`, `#[contractimpl]` and
@@ -10,6 +10,7 @@
 // reason only; human-written API is documented by review, and the doc comments
 // below are the standard the crate is held to.
 #![allow(missing_docs)]
+extern crate alloc;
 //! Lumina Registry — on-chain contract registry for the Lumina indexer.
 //!
 //! Projects deploy their Soroban contracts and register them here so that
@@ -370,6 +371,8 @@ pub struct ContractProfile {
     pub reputation: Reputation,
     /// The contract that supersedes this one, if the owner has set one.
     pub superseded_by: Option<Address>,
+    /// Optional URI pointing at richer off-chain metadata.
+    pub metadata_uri: Option<String>,
 }
 
 /// Paginated result of contract entries with pagination info.
@@ -677,6 +680,10 @@ pub enum DataKey {
     Tags(Address),
     /// Option<Address> — replacement contract that supersedes this one.
     SupersededBy(Address),
+
+    // ── Metadata ────────────────────────────────────────────────────────────
+    /// String — off-chain metadata URI (e.g., ipfs:// or https://).
+    MetadataUri(Address),
 
     // ── Succession ──────────────────────────────────────────────────────────
     /// Address — the contract that supersedes this registration, if any.
@@ -2752,6 +2759,7 @@ impl LuminaRegistry {
         Ok(ContractProfile {
             reputation,
             entry,
+            metadata_uri: env.storage().persistent().get(&DataKey::MetadataUri(contract_id.clone())),
             superseded_by: env
                 .storage()
                 .persistent()
@@ -2809,6 +2817,7 @@ impl LuminaRegistry {
                     if entry.active {
                         result.push_back(ContractProfile {
                             reputation: Self::reputation_of(&env, &contract_id),
+                            metadata_uri: env.storage().persistent().get(&DataKey::MetadataUri(contract_id.clone())),
                             superseded_by: env
                                 .storage()
                                 .persistent()
@@ -3010,6 +3019,7 @@ impl LuminaRegistry {
                     if entry.active {
                         entries.push_back(ContractProfile {
                             reputation: Self::reputation_of(&env, &contract_id),
+                            metadata_uri: env.storage().persistent().get(&DataKey::MetadataUri(contract_id.clone())),
                             superseded_by: env
                                 .storage()
                                 .persistent()
@@ -3133,6 +3143,68 @@ impl LuminaRegistry {
         Ok(())
     }
 
+    /// Update the off-chain metadata URI for a registration.
+    ///
+    /// The URI should point to a JSON document with this suggested shape:
+    /// `json
+    /// {
+    ///   "name": "Contract Name",
+    ///   "description": "...",
+    ///   "logo_uri": "https://...",
+    ///   "links": {
+    ///     "website": "...",
+    ///     "twitter": "...",
+    ///     "github": "..."
+    ///   },
+    ///   "audit": "https://..."
+    /// }
+    /// `
+    pub fn update_metadata_uri(
+        env: Env,
+        owner: Address,
+        contract_id: Address,
+        uri: Option<String>,
+    ) -> Result<(), RegistryError> {
+        owner.require_auth();
+
+        let entry: ContractEntry = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Contract(contract_id.clone()))
+            .ok_or(RegistryError::ContractNotFound)?;
+
+        if owner != entry.owner {
+            return Err(RegistryError::NotOwner);
+        }
+
+        if let Some(u) = &uri {
+            if u.len() > 2048 {
+                return Err(RegistryError::InvalidUri);
+            }
+            
+            let u_str: alloc::string::String = alloc::format!("{}", u);
+            if !u_str.starts_with("http://") && !u_str.starts_with("https://") && !u_str.starts_with("ipfs://") && !u_str.starts_with("ipns://") {
+                return Err(RegistryError::InvalidUri);
+            }
+        }
+
+        if let Some(u) = uri {
+            env.storage()
+                .persistent()
+                .set(&DataKey::MetadataUri(contract_id.clone()), &u);
+        } else {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::MetadataUri(contract_id.clone()));
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "metadata_uri_updated"),),
+            (contract_id, owner),
+        );
+
+        Ok(())
+    }
     /// Hand a registration over to a new owner.
     /// Only the current owner can call this (admin override removed — ownership
     /// transfer should be driven by the owner themselves).
