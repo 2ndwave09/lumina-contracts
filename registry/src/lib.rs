@@ -76,7 +76,7 @@ use soroban_sdk::{
 ///
 /// Bump this in the same commit as any change to the exported interface or to
 /// the storage shapes below.
-pub const CONTRACT_VERSION: u32 = 7;
+pub const CONTRACT_VERSION: u32 = 8;
 
 /// Minimum number of admins required for multi-sig governance.
 pub const MIN_ADMINS: u32 = 2;
@@ -2460,6 +2460,11 @@ impl LuminaRegistry {
     /// Paginated list of active registrations in one category, in
     /// registration order.
     ///
+    /// **Deprecated:** prefer [`LuminaRegistry::get_contracts_by_category_after`].
+    /// Offset pagination re-reads the whole category index up to `offset` on
+    /// every page, and a registration inserted mid-walk shifts every later
+    /// page. Retained for one release so existing callers keep working.
+    ///
     /// Semantics match [`LuminaRegistry::get_active_contracts`] exactly,
     /// including the one that surprises people: `offset` indexes into the
     /// category's raw index, not into the filtered result, so a page can come
@@ -2496,6 +2501,25 @@ impl LuminaRegistry {
         }
 
         result
+    }
+
+    /// Cursor form of [`LuminaRegistry::get_active_contracts_by_category`].
+    ///
+    /// `cursor` is the `contract_id` of the last entry the previous call
+    /// returned (`None` to start at the beginning). The position is anchored to
+    /// a registration rather than to a numeric index, so a registration added
+    /// mid-walk is appended after the cursor and cannot duplicate or skip an
+    /// entry already returned. Named without the `active_` prefix, and without
+    /// `get_active_contracts_by_category`'s full length, because Soroban caps
+    /// exported names at 32 characters.
+    pub fn get_contracts_by_category_after(
+        env: Env,
+        category: Category,
+        cursor: Option<Address>,
+        limit: u32,
+    ) -> Vec<ContractEntry> {
+        let index = Self::category_index(&env, &category);
+        Self::active_page_after(&env, &index, &cursor, limit)
     }
 
     /// Paginated list of active registrations in multiple categories.
@@ -2913,6 +2937,12 @@ impl LuminaRegistry {
     }
 
     /// Paginated list of active registered contracts in registration order.
+    ///
+    /// **Deprecated:** prefer [`LuminaRegistry::get_active_contracts_after`].
+    /// `offset` indexes into the raw `AllContracts` index, so walking the whole
+    /// registry re-reads every earlier entry on each page, and a registration
+    /// inserted mid-walk shifts every later page. Retained for one release so
+    /// `lumina-backend`'s indexer keeps working; see #26.
     pub fn get_active_contracts(env: Env, offset: u32, limit: u32) -> Vec<ContractEntry> {
         let all: Vec<Address> = env
             .storage()
@@ -2938,6 +2968,40 @@ impl LuminaRegistry {
         }
 
         result
+    }
+
+    /// Cursor-based listing of active registrations, for callers walking the
+    /// whole registry.
+    ///
+    /// `cursor` is the `contract_id` of the last entry the previous call
+    /// returned (`None` to start at the beginning), and `limit` bounds this
+    /// page. The position is anchored to a registration rather than to a
+    /// numeric index, so a registration inserted while the caller is walking is
+    /// appended after the cursor and neither duplicates nor skips an entry
+    /// already returned — the stability the offset form cannot offer.
+    ///
+    /// Typical loop:
+    ///
+    /// ```text
+    /// let mut cursor = None;
+    /// loop {
+    ///     let page = registry.get_active_contracts_after(cursor, 50);
+    ///     if page.is_empty() { break; }
+    ///     cursor = Some(page.last().contract_id);
+    ///     // consume page...
+    /// }
+    /// ```
+    pub fn get_active_contracts_after(
+        env: Env,
+        cursor: Option<Address>,
+        limit: u32,
+    ) -> Vec<ContractEntry> {
+        let all: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllContracts)
+            .unwrap_or(Vec::new(&env));
+        Self::active_page_after(&env, &all, &cursor, limit)
     }
 
     /// Paginated list of active contract addresses only, intended for indexers
@@ -3039,6 +3103,11 @@ impl LuminaRegistry {
 
     /// Paginated list of every contract registered by `owner`, including
     /// deactivated entries.
+    ///
+    /// **Deprecated:** prefer [`LuminaRegistry::get_contracts_by_owner_after`].
+    /// Offset pagination re-reads the owner's index up to `offset` on each
+    /// page, and a registration inserted mid-walk shifts every later page.
+    /// Retained for one release so existing callers keep working; see #26.
     pub fn get_contracts_by_owner(
         env: Env,
         owner: Address,
@@ -3063,6 +3132,24 @@ impl LuminaRegistry {
         }
 
         result
+    }
+
+    /// Cursor-based form of [`LuminaRegistry::get_contracts_by_owner`].
+    ///
+    /// `cursor` is the `contract_id` of the last entry the previous call
+    /// returned (`None` to start at the beginning). Like the offset form, this
+    /// includes deactivated registrations — an owner listing is a management
+    /// view, not a discovery one — and a registration added mid-walk is
+    /// appended after the cursor without duplicating or skipping earlier
+    /// entries.
+    pub fn get_contracts_by_owner_after(
+        env: Env,
+        owner: Address,
+        cursor: Option<Address>,
+        limit: u32,
+    ) -> Vec<ContractEntry> {
+        let owned = Self::owner_index(&env, &owner);
+        Self::page_after(&env, &owned, &cursor, limit)
     }
 
     /// Update a registered contract's name and description.
@@ -3842,6 +3929,74 @@ impl LuminaRegistry {
         env.storage()
             .persistent()
             .set(&DataKey::OwnerContracts(owner.clone()), contracts);
+    }
+
+    /// Raw index position a cursor walk resumes from: immediately after
+    /// `cursor`, or the end of the index when the cursor is absent.
+    ///
+    /// Ending rather than restarting when the cursor is gone is deliberate: a
+    /// cursor whose registration was removed has no recoverable position, and
+    /// replaying entries the caller already saw is worse than stopping.
+    fn cursor_start(index: &Vec<Address>, cursor: &Option<Address>) -> u32 {
+        match cursor {
+            None => 0,
+            Some(c) => index
+                .first_index_of(c)
+                .map(|i| i + 1)
+                .unwrap_or(index.len()),
+        }
+    }
+
+    /// Active `ContractEntry`s at or after `cursor` in `index`, up to `limit`.
+    fn active_page_after(
+        env: &Env,
+        index: &Vec<Address>,
+        cursor: &Option<Address>,
+        limit: u32,
+    ) -> Vec<ContractEntry> {
+        let mut result = Vec::new(env);
+        let mut i = Self::cursor_start(index, cursor);
+        while i < index.len() && result.len() < limit {
+            if let Some(contract_id) = index.get(i) {
+                if let Some(entry) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, ContractEntry>(&DataKey::Contract(contract_id))
+                {
+                    if entry.active {
+                        result.push_back(entry);
+                    }
+                }
+            }
+            i += 1;
+        }
+        result
+    }
+
+    /// Every `ContractEntry` at or after `cursor` in `index`, up to `limit`.
+    /// Unlike [`LuminaRegistry::active_page_after`] this does not filter on
+    /// `active`, matching `get_contracts_by_owner`'s management-view semantics.
+    fn page_after(
+        env: &Env,
+        index: &Vec<Address>,
+        cursor: &Option<Address>,
+        limit: u32,
+    ) -> Vec<ContractEntry> {
+        let mut result = Vec::new(env);
+        let mut i = Self::cursor_start(index, cursor);
+        while i < index.len() && result.len() < limit {
+            if let Some(contract_id) = index.get(i) {
+                if let Some(entry) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, ContractEntry>(&DataKey::Contract(contract_id))
+                {
+                    result.push_back(entry);
+                }
+            }
+            i += 1;
+        }
+        result
     }
 }
 
@@ -4664,6 +4819,140 @@ mod test {
         let b = client.get_contracts_by_owner(&owner_b, &0, &10);
         assert_eq!(b.len(), 1);
         assert!(page_contains(&b, &target_b));
+    }
+
+    // ── Cursor pagination (#26) ─────────────────────────────────────────────
+
+    #[test]
+    fn cursor_walks_every_active_entry_exactly_once() {
+        let (env, client, _admin) = setup();
+        for _ in 0..7 {
+            register_sample(&env, &client);
+        }
+
+        let mut seen: Vec<Address> = Vec::new(&env);
+        let mut cursor: Option<Address> = None;
+        loop {
+            let page = client.get_active_contracts_after(&cursor, &2);
+            if page.is_empty() {
+                break;
+            }
+            for entry in page.iter() {
+                assert!(
+                    !seen.contains(&entry.contract_id),
+                    "cursor walk returned an entry twice"
+                );
+                seen.push_back(entry.contract_id);
+            }
+            cursor = Some(page.get(page.len() - 1).unwrap().contract_id);
+        }
+        assert_eq!(seen.len(), 7);
+    }
+
+    #[test]
+    fn cursor_does_not_replay_or_skip_when_a_registration_is_added_mid_walk() {
+        let (env, client, _admin) = setup();
+        let (_o1, first) = register_sample(&env, &client);
+        let (_o2, second) = register_sample(&env, &client);
+        let (_o3, third) = register_sample(&env, &client);
+
+        let none: Option<Address> = None;
+        let page1 = client.get_active_contracts_after(&none, &2);
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1.get(0).unwrap().contract_id, first);
+        assert_eq!(page1.get(1).unwrap().contract_id, second);
+
+        // A registration lands mid-walk. It is appended to the index, so it
+        // appears after the cursor rather than shifting the entries already
+        // returned or being skipped.
+        let (_o4, fourth) = register_sample(&env, &client);
+
+        let cursor = Some(second);
+        let page2 = client.get_active_contracts_after(&cursor, &2);
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page2.get(0).unwrap().contract_id, third);
+        assert_eq!(page2.get(1).unwrap().contract_id, fourth);
+
+        let cursor = Some(fourth);
+        assert!(client.get_active_contracts_after(&cursor, &2).is_empty());
+    }
+
+    #[test]
+    fn category_cursor_walks_every_active_entry_exactly_once() {
+        let (env, client, _admin) = setup();
+        let owner = Address::generate(&env);
+        for _ in 0..5 {
+            register_in(&env, &client, &owner, &[Category::DeFi]);
+        }
+        // Noise filed under another category must not leak into the walk.
+        register_in(&env, &client, &owner, &[Category::Nft]);
+
+        let mut seen: Vec<Address> = Vec::new(&env);
+        let mut cursor: Option<Address> = None;
+        loop {
+            let page = client.get_contracts_by_category_after(&Category::DeFi, &cursor, &2);
+            if page.is_empty() {
+                break;
+            }
+            for entry in page.iter() {
+                assert!(
+                    !seen.contains(&entry.contract_id),
+                    "category cursor walk returned an entry twice"
+                );
+                seen.push_back(entry.contract_id);
+            }
+            cursor = Some(page.get(page.len() - 1).unwrap().contract_id);
+        }
+        assert_eq!(seen.len(), 5);
+    }
+
+    #[test]
+    fn owner_cursor_walks_every_entry_exactly_once_and_keeps_deactivated() {
+        let (env, client, _admin) = setup();
+        let owner = Address::generate(&env);
+        let other = Address::generate(&env);
+        let first = register_for(&env, &client, &owner);
+        let second = register_for(&env, &client, &owner);
+        register_for(&env, &client, &owner);
+        // Another owner's entries must not leak in.
+        register_for(&env, &client, &other);
+        // The owner listing is a management view, so deactivated entries stay.
+        client.deactivate(&owner, &first);
+
+        let mut seen: Vec<Address> = Vec::new(&env);
+        let mut cursor: Option<Address> = None;
+        loop {
+            let page = client.get_contracts_by_owner_after(&owner, &cursor, &2);
+            if page.is_empty() {
+                break;
+            }
+            for entry in page.iter() {
+                assert!(
+                    !seen.contains(&entry.contract_id),
+                    "owner cursor walk returned an entry twice"
+                );
+                seen.push_back(entry.contract_id);
+            }
+            cursor = Some(page.get(page.len() - 1).unwrap().contract_id);
+        }
+        assert_eq!(seen.len(), 3);
+        assert!(seen.contains(&first));
+        assert!(seen.contains(&second));
+    }
+
+    #[test]
+    fn cursor_whose_registration_was_deregistered_ends_the_walk() {
+        let (env, client, _admin) = setup();
+        let (owner, first) = register_sample(&env, &client);
+        register_for(&env, &client, &owner);
+
+        client.deactivate(&owner, &first);
+        client.deregister(&owner, &first);
+
+        // The cursor's registration is gone, so its position is unrecoverable.
+        // The walk stops rather than replaying entries the caller already saw.
+        let cursor = Some(first);
+        assert!(client.get_active_contracts_after(&cursor, &10).is_empty());
     }
 
     #[test]

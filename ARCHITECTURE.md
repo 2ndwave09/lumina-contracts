@@ -94,6 +94,16 @@ and `limit` to that filtered union. `get_contracts_by_owner` also differs: it
 resolves the owner's ordered index without active filtering and therefore
 includes inactive registrations.
 
+The cursor variants — `get_active_contracts_after`,
+`get_contracts_by_category_after` and `get_contracts_by_owner_after` — walk the
+same indexes but resume from the id of the last entry returned instead of a
+numeric offset. They are the recommended way to page a whole list: an offset
+walk re-reads everything before its position on every page, and an insertion
+mid-walk shifts every later page, whereas a cursor is anchored to a
+registration, so entries added while walking are appended and never duplicate
+or skip one already returned. The offset entrypoints are retained for one
+release and documented as deprecated.
+
 ## Registration lifecycle
 
 1. `register_contract` authenticates the owner, applies the optional

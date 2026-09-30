@@ -192,6 +192,17 @@ pub trait RegistryInterface {
         limit: u32,
     ) -> Vec<ContractEntry>;
 
+    /// Cursor form of `get_active_contracts_by_category`, for walking a whole
+    /// category without re-reading it page by page. `cursor` is the
+    /// `contract_id` last returned, or `None` to start; the position is stable
+    /// against registrations added mid-walk.
+    fn get_contracts_by_category_after(
+        env: Env,
+        category: Category,
+        cursor: Option<Address>,
+        limit: u32,
+    ) -> Vec<ContractEntry>;
+
     /// One page of active registrations filed under **any** of `categories` —
     /// the union, deduplicated, in registration order.
     ///
@@ -291,8 +302,19 @@ pub trait RegistryInterface {
     /// One page of active registrations in registration order.
     ///
     /// `offset` indexes the raw index, so a page can come back shorter than
-    /// `limit` while more active registrations follow. See the trait docs.
+    /// `limit` while more active registrations follow. Deprecated in favour of
+    /// `get_active_contracts_after`; see the trait docs.
     fn get_active_contracts(env: Env, offset: u32, limit: u32) -> Vec<ContractEntry>;
+
+    /// Cursor form of `get_active_contracts`. Pass the `contract_id` of the
+    /// last entry the previous call returned (or `None` to start) and walk
+    /// until an empty page. Cheaper than offset paging and stable against
+    /// registrations added mid-walk.
+    fn get_active_contracts_after(
+        env: Env,
+        cursor: Option<Address>,
+        limit: u32,
+    ) -> Vec<ContractEntry>;
 
     /// As `get_active_contracts`, but only the addresses. Cheaper to decode
     /// and much smaller to return, for a consumer that does not read the
@@ -307,10 +329,20 @@ pub trait RegistryInterface {
     fn get_active_profiles_page(env: Env, offset: u32, limit: u32) -> ContractProfilePage;
 
     /// Every contract registered by `owner`, **including** deactivated ones.
+    /// Deprecated in favour of `get_contracts_by_owner_after`.
     fn get_contracts_by_owner(
         env: Env,
         owner: Address,
         offset: u32,
+        limit: u32,
+    ) -> Vec<ContractEntry>;
+
+    /// Cursor form of `get_contracts_by_owner`, including deactivated entries.
+    /// `cursor` is the `contract_id` last returned, or `None` to start.
+    fn get_contracts_by_owner_after(
+        env: Env,
+        owner: Address,
+        cursor: Option<Address>,
         limit: u32,
     ) -> Vec<ContractEntry>;
 }
